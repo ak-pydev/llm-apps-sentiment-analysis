@@ -22,8 +22,10 @@ services:
     ports:
       - "9092:9092"
     environment:
-      KAFKA_ADVERTISED_HOST_NAME: kafka
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     networks:
       - datapipeline
 
@@ -70,17 +72,21 @@ services:
       - datapipeline
 
   airflow:
-    image: apache/airflow:slim-latest
+    image: apache/airflow:slim-latest-python3.12
     container_name: airflow
-    depends_on:
-      - postgres
     environment:
-      - EXECUTOR=Sequential
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/airflow
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__FERNET_KEY: "test_key_123"
+      AIRFLOW__WEBSERVER__SECRET_KEY: "test_key_123"
+    command: >
+      bash -c "
+      airflow db migrate &&
+      airflow standalone
+      "
     ports:
-      - "8082:8082"
+      - "8082:8080"
     volumes:
       - ./dags:/opt/airflow/dags
-      - ./requirements.txt:/opt/airflow/requirements.txt
     networks:
       - datapipeline

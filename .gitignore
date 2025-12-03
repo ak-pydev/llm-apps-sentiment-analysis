@@ -1,4 +1,3 @@
-
 # Python
 __pycache__/
 *.py[cod]
@@ -26,3 +25,4 @@ ENV/
 # Mac
 .DS_Store
 
+data/

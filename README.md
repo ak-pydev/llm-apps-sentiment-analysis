@@ -1,40 +1,308 @@
-# LLM App - Sentiment Analysis (example infra)
+# Sentiment Analysis Data Pipeline
 
-This repository contains a lightweight example scaffold for a streaming sentiment-analysis pipeline.
-It includes components for Kafka, Cassandra, a producer, a Spark streaming job, and an Airflow DAG for daily stats.
+A modern streaming pipeline for real-time sentiment analysis built with **Kafka**, **Spark**, **Cassandra**, and **Airflow**.
 
-Quick structure
-
-- `docker-compose.yml` - orchestrates Kafka, Zookeeper, Cassandra, producer, Spark, and Airflow (example)
-- `airflow/` - DAGs and requirements
-  - `dags/sentiment_daily_stats.py` - Airflow DAG that queries Cassandra for daily sentiment counts
-  - `requirements.txt` - dependencies for Airflow (Cassandra driver)
-- `spark/` - Spark job Dockerfile and streaming job
-  - `Dockerfile` - builds Spark image (uses bitnami/spark base)
-  - `sentiment_streaming_job.py` - PySpark Structured Streaming job that reads Kafka and computes sentiment
-- `producer/` - simple Python Kafka producer
-  - `Dockerfile` - builds minimal producer image
-  - `producer.py` - emits sample messages to `sentiment` topic
-- `cassandra/init.cql` - creates keyspace/table on Cassandra init
-- `config/kafka_topics.sh` - helper to create a Kafka topic
-
-Run (local dev)
-
-1. Start services (requires Docker & Docker Compose):
-
-```bash
-docker-compose up --build
+```
+Producer → Kafka → Spark Streaming → Cassandra
+                                          ↓
+                                      Airflow DAG
+                                   (daily analytics)
 ```
 
-2. Create the Kafka topic (if needed):
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Docker & Docker Compose
+- Python 3.10+ (for local development)
+
+### Setup (5 minutes)
+
+```bash
+# 1. Start all services
+docker compose up -d
+
+# 2. Verify services are running
+docker compose ps
+
+# 3. Run the producer (streams CSV data to Kafka)
+uv run python producer/producer.py
+
+# 4. In another terminal, consume messages
+uv run python consumer/consumer.py
+```
+
+**Access UIs:**
+- **Spark Master:** http://localhost:8080
+- **Airflow:** http://localhost:8082 (find credentials in logs)
+- **Kafka UI** (optional): Set up with additional compose service
+
+---
+
+## Architecture
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| Zookeeper | 2181 | Kafka coordination |
+| Kafka | 9092 | Message broker |
+| Cassandra | 9042 | Time-series database |
+| Spark Master | 7077, 8080 | Distributed compute & UI |
+| PostgreSQL | 5432 | Airflow metadata store |
+| Airflow | 8082 | Workflow orchestration |
+
+---
+
+## Project Structure
+
+```
+.
+├── docker-compose.yml              # Service orchestration
+├── data/raw/                       # Input CSV files
+├── producer/
+│   ├── Dockerfile                  
+│   └── producer.py                 # CSV → Kafka
+├── consumer/
+│   └── consumer.py                 # Kafka → stdout
+├── spark/
+│   └── Dockerfile                  
+├── dags/
+│   └── sentiment_daily_stats.py    # Airflow orchestration
+├── config/
+│   └── kafka_topics.sh             
+├── airflow/
+│   └── requirements.txt            
+└── README.md
+```
+
+---
+
+## Key Components
+
+### Producer
+- Reads CSV files from `data/raw/`
+- Streams to Kafka `reviews` topic
+- Adds app metadata
+
+**Env vars:**
+- `KAFKA_BOOTSTRAP_SERVERS` (default: `localhost:9092`)
+- `KAFKA_TOPIC` (default: `reviews`)
+
+### Consumer
+- Reads from Kafka topic
+- Processes and prints messages
+- Can be extended for Cassandra writes
+
+### Spark
+- Containerized Spark runtime
+- Ready for stream processing
+- Integrates with Kafka and Cassandra
+
+### Airflow DAG
+- Daily aggregation queries
+- Cassandra statistics export
+- Runs at midnight UTC
+
+### Cassandra
+- **Keyspace:** `llm_reviews`
+- **Table:** `reviews_by_app`
+- Stores app reviews with sentiment
+
+---
+
+## Commands
+
+### Pipeline
+
+```bash
+# Start services (background)
+docker compose up -d
+
+# View running services
+docker compose ps
+
+# Stream logs (follow mode, last 50 lines)
+docker compose logs -f <service> --tail 50
+
+# Stop all services
+docker compose down
+
+# Stop and delete volumes (WARNING: destroys data)
+docker compose down -v
+```
+
+### Kafka
+
+```bash
+# List topics
+docker exec -it kafka kafka-topics.sh --bootstrap-server kafka:9092 --list
+
+# Create topic
+docker exec -it kafka kafka-topics.sh \
+  --bootstrap-server kafka:9092 \
+  --create --topic reviews --partitions 1 --replication-factor 1
+
+# Consume from beginning
+docker exec -it kafka kafka-console-consumer.sh \
+  --bootstrap-server kafka:9092 \
+  --topic reviews \
+  --from-beginning
+
+# Produce test message (interactive)
+docker exec -it kafka kafka-console-producer.sh \
+  --broker-list kafka:9092 \
+  --topic reviews
+```
+
+### Producer
+
+```bash
+# Run with uv
+uv run python producer/producer.py
+
+# Or with Python
+python producer/producer.py
+```
+
+### Consumer
+
+```bash
+# Run with uv
+uv run python consumer/consumer.py
+
+# Or with Python
+python consumer/consumer.py
+```
+
+### Cassandra
+
+```bash
+# Enter Cassandra shell
+docker exec -it cassandra cqlsh
+
+# Inside cqlsh:
+DESCRIBE KEYSPACES;
+USE llm_reviews;
+SELECT * FROM reviews_by_app LIMIT 20;
+SELECT COUNT(*) FROM reviews_by_app;
+```
+
+### Airflow
+
+**Web UI:** http://localhost:8082
+
+```bash
+# Get auto-generated credentials
+docker logs airflow | grep -i "username" -n10
+
+# Restart Airflow
+docker compose restart airflow
+
+# Manually trigger DAG
+docker exec -it airflow airflow dags trigger sentiment_daily_stats
+
+# View task logs
+docker exec -it airflow airflow tasks logs sentiment_daily_stats query_cassandra
+```
+
+### Spark
+
+**Web UI:** http://localhost:8080
+
+```bash
+# Check version
+docker exec -it spark-master /opt/spark/bin/spark-submit --version
+
+# Submit job
+docker exec -it spark-master /opt/spark/bin/spark-submit \
+  --master spark://spark-master:7077 \
+  /path/to/job.py
+
+# View logs
+docker compose logs -f spark-master
+```
+
+---
+
+## Local Development
+
+### Setup Python Environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r airflow/requirements.txt
+```
+
+### Run Airflow Locally
+
+```bash
+# Terminal 1
+airflow db migrate
+airflow webserver
+
+# Terminal 2
+airflow scheduler
+```
+
+---
+
+## Configuration
+
+### Spark Workers
+
+Adjust in `docker-compose.yml`:
+
+```yaml
+spark-worker:
+  environment:
+    SPARK_WORKER_CORES: 4
+    SPARK_WORKER_MEMORY: 4g
+```
+
+### Kafka Topics
+
+Edit `config/kafka_topics.sh` or run:
 
 ```bash
 ./config/kafka_topics.sh
 ```
 
-3. The `producer` service in compose will emit sample messages to the `sentiment` topic. The Spark service runs a demo `spark-submit` that prints sentiment to console. Airflow UI is available at `http://localhost:8080` (webserver image used in compose).
+---
 
-Notes
+## Troubleshooting
 
-- This scaffold is intended as an example; images, versions, and production hardening are intentionally minimal.
-- For real deployments: secure credentials, use proper Docker images for Spark/airflow, externalize configs, and use a proper cluster for Spark and Cassandra.
+| Issue | Solution |
+|-------|----------|
+| **Port in use** | Change port in `docker-compose.yml` |
+| **Cassandra won't start** | Check `/var/lib/cassandra` permissions |
+| **Airflow DB error** | Remove `airflow/airflow.db` and restart |
+| **Kafka connection refused** | Verify Kafka running: `docker compose logs kafka` |
+| **Services slow to start** | Wait 30s, then check: `docker compose ps` |
+
+---
+
+## Next Steps
+
+- [ ] Add NLP models (TextBlob, Hugging Face, LLM) to sentiment analysis
+- [ ] Write Spark output to Cassandra for dashboards
+- [ ] Scale Spark cluster horizontally
+- [ ] Add Prometheus/Grafana monitoring
+- [ ] Implement schema registry for Kafka
+- [ ] Add data quality checks & validation
+
+---
+
+## Resources
+
+- [Apache Kafka Docs](https://kafka.apache.org/documentation/)
+- [PySpark Streaming](https://spark.apache.org/docs/latest/streaming-programming-guide.html)
+- [Cassandra CQL](https://cassandra.apache.org/doc/latest/cassandra/cql/)
+- [Airflow DAGs](https://airflow.apache.org/docs/apache-airflow/stable/tutorial.html)
+
+---
+
+**License:** MIT  
+**Author:** ak-pydev  
+**Last Updated:** December 2025
