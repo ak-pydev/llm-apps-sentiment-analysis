@@ -1,12 +1,10 @@
 # Sentiment Analysis Data Pipeline
 
-A modern streaming pipeline for real-time sentiment analysis built with **Kafka**, **Spark**, **Cassandra**, and **Airflow**.
+A modern streaming pipeline for app review sentiment analysis built with **Kafka**, **Spark**, **Cassandra**, and **Airflow**.
 
 ```
-Producer → Kafka → Spark Streaming → Cassandra
-                                          ↓
-                                      Airflow DAG
-                                   (daily analytics)
+Scraper → Kafka → Spark → Cassandra → API / Dashboard / Notebook
+↑ Airflow scheduling & orchestration
 ```
 
 ---
@@ -27,17 +25,17 @@ docker compose up -d
 # 2. Verify services are running
 docker compose ps
 
-# 3. Run the producer (streams CSV data to Kafka)
+# 3. Run the scraper (streams app reviews to Kafka)
 uv run python producer/producer.py
 
-# 4. In another terminal, consume messages
+# 4. In another terminal, consume & process messages
 uv run python consumer/consumer.py
 ```
 
 **Access UIs:**
 - **Spark Master:** http://localhost:8080
 - **Airflow:** http://localhost:8082 (find credentials in logs)
-- **Kafka UI** (optional): Set up with additional compose service
+- **Cassandra:** Port 9042 (CQL queries via `docker exec`)
 
 ---
 
@@ -59,16 +57,16 @@ uv run python consumer/consumer.py
 ```
 .
 ├── docker-compose.yml              # Service orchestration
-├── data/raw/                       # Input CSV files
+├── data/raw/                       # Input app reviews
 ├── producer/
 │   ├── Dockerfile                  
-│   └── producer.py                 # CSV → Kafka
+│   └── producer.py                 # Scraper → Kafka
 ├── consumer/
-│   └── consumer.py                 # Kafka → stdout
+│   └── consumer.py                 # Kafka → Process
 ├── spark/
 │   └── Dockerfile                  
 ├── dags/
-│   └── sentiment_daily_stats.py    # Airflow orchestration
+│   └── sentiment_daily_stats.py    # Airflow DAG
 ├── config/
 │   └── kafka_topics.sh             
 ├── airflow/
@@ -80,8 +78,8 @@ uv run python consumer/consumer.py
 
 ## Key Components
 
-### Producer
-- Reads CSV files from `data/raw/`
+### Scraper
+- Reads app reviews from data sources
 - Streams to Kafka `reviews` topic
 - Adds app metadata
 
@@ -89,25 +87,30 @@ uv run python consumer/consumer.py
 - `KAFKA_BOOTSTRAP_SERVERS` (default: `localhost:9092`)
 - `KAFKA_TOPIC` (default: `reviews`)
 
-### Consumer
-- Reads from Kafka topic
-- Processes and prints messages
-- Can be extended for Cassandra writes
+### Kafka
+- Event broker for review stream
+- Decouples scraper from processing
+- Enables horizontal scaling
 
 ### Spark
-- Containerized Spark runtime
-- Ready for stream processing
-- Integrates with Kafka and Cassandra
-
-### Airflow DAG
-- Daily aggregation queries
-- Cassandra statistics export
-- Runs at midnight UTC
+- Stream processing engine
+- Computes sentiment analysis
+- Writes results to Cassandra
 
 ### Cassandra
 - **Keyspace:** `llm_reviews`
 - **Table:** `reviews_by_app`
-- Stores app reviews with sentiment
+- Time-series storage for queries
+
+### Airflow
+- Schedules scraper runs
+- Orchestrates batch aggregations
+- Monitors pipeline health
+
+### Outputs
+- **API** – Real-time sentiment endpoints
+- **Dashboard** – Visualization layer (Grafana/Dash)
+- **Notebook** – Analysis & exploration
 
 ---
 
@@ -165,6 +168,8 @@ uv run python producer/producer.py
 python producer/producer.py
 ```
 
+Scrapes app reviews and streams to Kafka.
+
 ### Consumer
 
 ```bash
@@ -174,6 +179,8 @@ uv run python consumer/consumer.py
 # Or with Python
 python consumer/consumer.py
 ```
+
+Consumes reviews from Kafka, processes them, and writes to Cassandra.
 
 ### Cassandra
 
@@ -285,12 +292,13 @@ Edit `config/kafka_topics.sh` or run:
 
 ## Next Steps
 
-- [ ] Add NLP models (TextBlob, Hugging Face, LLM) to sentiment analysis
-- [ ] Write Spark output to Cassandra for dashboards
-- [ ] Scale Spark cluster horizontally
-- [ ] Add Prometheus/Grafana monitoring
+- [ ] Add sentiment models (TextBlob, Hugging Face, LLM) to Spark
+- [ ] Build API endpoints for sentiment queries
+- [ ] Create Grafana dashboard for real-time monitoring
+- [ ] Add Jupyter notebook for exploratory analysis
 - [ ] Implement schema registry for Kafka
-- [ ] Add data quality checks & validation
+- [ ] Add data quality & validation checks
+- [ ] Deploy to production (Kubernetes, cloud)
 
 ---
 
