@@ -38,17 +38,25 @@ services:
       - datapipeline
 
   spark-master:
-    image: apache/spark:latest
+    image: apache/spark:3.5.3-scala2.12-java11-python3-ubuntu
     container_name: spark-master
     command: /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master
+    environment:
+      SPARK_NO_DAEMONIZE: "true"
+      IVY_HOME: /tmp/.ivy2
+      SPARK_LOCAL_DIRS: /tmp/spark-temp
     ports:
       - "7077:7077"
       - "8080:8080"
     networks:
       - datapipeline
+    volumes:
+      - ./spark-jobs:/opt/spark-jobs
+      - ./data:/data
+      - spark_ivy_cache:/tmp/.ivy2
 
   spark-worker:
-    image: apache/spark:latest
+    image: apache/spark:3.5.3-scala2.12-java11-python3-ubuntu
     container_name: spark-worker
     depends_on:
       - spark-master
@@ -56,8 +64,15 @@ services:
     environment:
       SPARK_WORKER_CORES: 2
       SPARK_WORKER_MEMORY: 1g
+      SPARK_NO_DAEMONIZE: "true"
+      IVY_HOME: /tmp/.ivy2
+      SPARK_LOCAL_DIRS: /tmp/spark-temp
     networks:
       - datapipeline
+    volumes:
+      - ./spark-jobs:/opt/spark-jobs
+      - ./data:/data
+      - spark_ivy_cache:/tmp/.ivy2
 
   postgres:
     image: arm64v8/postgres:14
@@ -70,6 +85,21 @@ services:
       POSTGRES_DB: airflow
     networks:
       - datapipeline
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    ports:
+      - "5050:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    networks:
+      - datapipeline
+    depends_on:
+      - postgres
 
   airflow:
     image: apache/airflow:slim-latest-python3.12
@@ -79,14 +109,26 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
       AIRFLOW__CORE__FERNET_KEY: "test_key_123"
       AIRFLOW__WEBSERVER__SECRET_KEY: "test_key_123"
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"  # Don't load example DAGs
     command: >
       bash -c "
+      pip install kafka-python psycopg2-binary &&
       airflow db migrate &&
       airflow standalone
       "
     ports:
       - "8082:8080"
     volumes:
-      - ./dags:/opt/airflow/dags
+    - ./dags:/opt/airflow/dags
+    - ./producer:/opt/airflow/producer      
+    - ./consumer:/opt/airflow/consumer      
+    - ./requirements.txt:/opt/airflow/requirements.txt  
+    - /var/run/docker.sock:/var/run/docker.sock  
     networks:
-      - datapipeline
+    - datapipeline
+    depends_on:
+    - postgres
+
+volumes:
+  postgres_data:
+  spark_ivy_cache:

@@ -26,3 +26,5 @@ ENV/
 .DS_Store
 
 data/
+
+spark-jars/

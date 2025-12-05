@@ -1,157 +1,207 @@
+# consumer.py
 import os
 import json
 import time
 from datetime import datetime
-
 from kafka import KafkaConsumer
-from cassandra.cluster import Cluster
+import psycopg2
+from psycopg2.extras import execute_values
 
 
-# --------------------
-# Config
-# --------------------
 KAFKA_BROKER = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 TOPIC = os.getenv("KAFKA_TOPIC", "reviews")
 
-# Host is your Mac, mapped to the cassandra container
-CASSANDRA_HOST = os.getenv("CASSANDRA_HOST", "127.0.0.1")
-CASSANDRA_PORT = int(os.getenv("CASSANDRA_PORT", 9042))
-KEYSPACE = os.getenv("CASSANDRA_KEYSPACE", "llm_reviews")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", 5432))
+POSTGRES_DB = os.getenv("POSTGRES_DB", "llm_reviews")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "airflow")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "airflow")
 
 
-# --------------------
-# Helpers
-# --------------------
-def connect_cassandra(host: str, port: int, delay: int = 5):
-    """
-    Keep retrying until Cassandra is ready.
-    """
-    while True:
+def connect_postgres(retries: int = 5, delay: int = 5):
+    """Connect to PostgreSQL with retry logic"""
+    for attempt in range(1, retries + 1):
         try:
-            print(f"[CASSANDRA] Connecting to {host}:{port} ...")
-            cluster = Cluster([host], port=port)
-            session = cluster.connect()
-            print("[CASSANDRA] Connected.")
-            return cluster, session
+            print(f"Connecting to PostgreSQL at {POSTGRES_HOST}:{POSTGRES_PORT} (attempt {attempt}/{retries})")
+            conn = psycopg2.connect(
+                host=POSTGRES_HOST,
+                port=POSTGRES_PORT,
+                database=POSTGRES_DB,
+                user=POSTGRES_USER,
+                password=POSTGRES_PASSWORD
+            )
+            print("✓ Connected to PostgreSQL!")
+            return conn
         except Exception as e:
-            print(f"[CASSANDRA] Not ready: {e}. Retrying in {delay}s...")
-            time.sleep(delay)
+            print(f"Failed to connect: {e}")
+            if attempt < retries:
+                print(f"Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                raise
 
 
-def parse_timestamp(at_raw: str):
-    if not at_raw:
-        return None
-    try:
-        # Handle formats like "2024-01-01T12:34:56Z"
-        return datetime.fromisoformat(at_raw.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-
-def to_float(value):
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except Exception:
-        return None
-
-
-def to_int(value):
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except Exception:
-        return None
-
-
-# --------------------
-# Kafka Consumer
-# --------------------
-consumer = KafkaConsumer(
-    TOPIC,
-    bootstrap_servers=[KAFKA_BROKER],
-    auto_offset_reset="earliest",
-    enable_auto_commit=True,
-    group_id=None,  # always read full topic
-    consumer_timeout_ms=30000,  # stop after 30s of no messages
-    value_deserializer=lambda v: json.loads(v.decode("utf-8")),
-)
-
-print(f"[KAFKA] Connected to {KAFKA_BROKER}, subscribed to topic: {TOPIC}")
-
-
-# --------------------
-# Cassandra Setup
-# --------------------
-cluster, session = connect_cassandra(CASSANDRA_HOST, CASSANDRA_PORT)
-
-session.execute(
-    f"""
-    CREATE KEYSPACE IF NOT EXISTS {KEYSPACE}
-    WITH replication = {{'class':'SimpleStrategy', 'replication_factor':1}}
-"""
-)
-session.set_keyspace(KEYSPACE)
-
-session.execute(
-    """
-    CREATE TABLE IF NOT EXISTS reviews_by_app (
-        app_name text,
-        reviewId text,
-        at timestamp,
-        score double,
-        content text,
-        thumbsUpCount int,
-        PRIMARY KEY ((app_name), reviewId, at)
-    )
-"""
-)
-
-print(f"[CASSANDRA] Keyspace '{KEYSPACE}' and table 'reviews_by_app' are ready.")
-
-insert_cql = session.prepare(
-    """
-    INSERT INTO reviews_by_app (app_name, reviewId, at, score, content, thumbsUpCount)
-    VALUES (?, ?, ?, ?, ?, ?)
-"""
-)
-
-
-# --------------------
-# Consume & Insert Loop
-# --------------------
-count = 0
-print("[CONSUMER] Starting main loop...")
-
-for msg in consumer:
-    rec = msg.value
-    print("[KAFKA] Consumed:", rec)
-
-    app_name = rec.get("app_name")
-    review_id = rec.get("reviewId")
-    at = parse_timestamp(rec.get("at"))
-    score = to_float(rec.get("score"))
-    content = rec.get("content")
-    thumbs = to_int(rec.get("thumbsUpCount"))
-
-    try:
-        session.execute(
-            insert_cql,
-            (app_name, review_id, at, score, content, thumbs),
+def setup_database(conn):
+    """Create table if it doesn't exist"""
+    cur = conn.cursor()
+    
+    # Create table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS reviews (
+            app_name VARCHAR(255),
+            reviewId VARCHAR(255) PRIMARY KEY,
+            at TIMESTAMP,
+            score DOUBLE PRECISION,
+            content TEXT,
+            thumbsUpCount INTEGER
         )
-        print(f"[CASSANDRA] Inserted reviewId={review_id} for app={app_name}")
-    except Exception as e:
-        print("[CASSANDRA] Error inserting record:", e)
-        print("  Record:", rec)
+    """)
+    
+    conn.commit()
+    cur.close()
+    print("✓ PostgreSQL table ready")
 
-    count += 1
-    time.sleep(3)  # throttle for readability
 
-if count == 0:
-    print("[CONSUMER] No messages consumed. Exiting.")
+def main():
+    print("=" * 60)
+    print("Kafka to PostgreSQL Consumer")
+    print("=" * 60)
+    print(f"Kafka Broker: {KAFKA_BROKER}")
+    print(f"Topic: {TOPIC}")
+    print(f"PostgreSQL: {POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}")
+    print("=" * 60)
+    
+    # Connect to PostgreSQL
+    conn = connect_postgres()
+    setup_database(conn)
+    
+    # Prepare cursor for insertions
+    cur = conn.cursor()
+    
+    # Kafka Consumer
+    print("\nConnecting to Kafka...")
+    consumer = KafkaConsumer(
+        TOPIC,
+        bootstrap_servers=[KAFKA_BROKER],
+        auto_offset_reset="earliest",
+        enable_auto_commit=True,
+        group_id="postgres-consumer-group",
+        consumer_timeout_ms=10000,
+        value_deserializer=lambda v: json.loads(v.decode("utf-8")),
+    )
+    
+    print("✓ Connected to Kafka")
+    print("Listening for messages...\n")
+    
+    count = 0
+    errors = 0
+    start_time = time.time()
+    
+    try:
+        for msg in consumer:
+            try:
+                rec = msg.value
+                
+                # Extract fields
+                app_name = rec.get("app_name", "unknown")
+                review_id = rec.get("reviewId", "")
+                
+                if not review_id:
+                    print(f"⚠️  Skipping record with missing reviewId")
+                    continue
+                
+                # Parse timestamp
+                at_raw = rec.get("at", "")
+                try:
+                    if at_raw:
+                        at = datetime.fromisoformat(at_raw.replace("Z", "+00:00"))
+                    else:
+                        at = datetime.now()
+                except Exception as e:
+                    print(f"Warning: Could not parse timestamp '{at_raw}': {e}")
+                    at = datetime.now()
+                
+                # Parse numeric fields
+                try:
+                    score = float(rec.get("score", 0))
+                except (ValueError, TypeError):
+                    score = 0.0
+                
+                content = rec.get("content", "")
+                
+                try:
+                    thumbs = int(rec.get("thumbsUpCount", 0))
+                except (ValueError, TypeError):
+                    thumbs = 0
+                
+                # Insert into PostgreSQL (ON CONFLICT to handle duplicates)
+                cur.execute("""
+                    INSERT INTO reviews (app_name, reviewId, at, score, content, thumbsUpCount)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (reviewId) DO UPDATE SET
+                        app_name = EXCLUDED.app_name,
+                        at = EXCLUDED.at,
+                        score = EXCLUDED.score,
+                        content = EXCLUDED.content,
+                        thumbsUpCount = EXCLUDED.thumbsUpCount
+                """, (app_name, review_id, at, score, content, thumbs))
+                
+                conn.commit()
+                count += 1
+                
+                # Progress update
+                if count % 100 == 0:
+                    elapsed = time.time() - start_time
+                    rate = count / elapsed if elapsed > 0 else 0
+                    print(f"[{count:,}] Inserted | Rate: {rate:.1f} records/sec | App: {app_name}")
+                
+            except Exception as e:
+                errors += 1
+                print(f"✗ Error processing record: {e}")
+                conn.rollback()  # Rollback failed transaction
+                if errors > 10:
+                    print("Too many errors, stopping...")
+                    break
+    
+    except KeyboardInterrupt:
+        print("\n\nStopping consumer (Ctrl+C pressed)...")
+    
+    finally:
+        elapsed = time.time() - start_time
+        rate = count / elapsed if elapsed > 0 else 0
+        
+        print("\n" + "=" * 60)
+        print("SUMMARY")
+        print("=" * 60)
+        print(f"Total records inserted: {count:,}")
+        print(f"Errors encountered: {errors}")
+        print(f"Time elapsed: {elapsed:.1f} seconds")
+        print(f"Average rate: {rate:.1f} records/sec")
+        print("=" * 60)
+        
+        # Verify data
+        if count > 0:
+            print("\nVerifying data in PostgreSQL...")
+            cur.execute("SELECT COUNT(*) FROM reviews")
+            total = cur.fetchone()[0]
+            print(f"✓ Total records in PostgreSQL: {total:,}")
+            
+            # Show sample by app
+            print("\nBreakdown by app:")
+            cur.execute("""
+                SELECT app_name, COUNT(*) as count 
+                FROM reviews 
+                GROUP BY app_name 
+                ORDER BY count DESC
+            """)
+            for row in cur.fetchall():
+                print(f"  {row[0]}: {row[1]:,} reviews")
+        
+        cur.close()
+        conn.close()
+        consumer.close()
+        print("\n✓ Connections closed")
 
-consumer.close()
-cluster.shutdown()
-print(f"[CONSUMER] Done. Total messages inserted: {count}")
+
+if __name__ == "__main__":
+    main()
