@@ -12,8 +12,8 @@
 
 ### **Step 1: Clone Repository**
 
-git clone https://github.com/ak-pydev/llm-apps-sentiment-analysis.git
 ```
+git clone https://github.com/ak-pydev/llm-apps-sentiment-analysis.git
 ```
 ```bash
 cd llm-app-sentiment-analysis
