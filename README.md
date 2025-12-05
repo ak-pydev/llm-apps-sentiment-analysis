@@ -1,167 +1,236 @@
-# LLM App Sentiment Analysis Platform
+# LLM App Sentiment Analysis Pipeline - Execution Commands
 
-Full-stack web app for analyzing app reviews with sentiment analysis. Built with **FastAPI** (backend), **React** (frontend), **PostgreSQL** (database), **Kafka** & **Spark** (streaming).
+## 📋 Prerequisites
 
-## 🚀 Quick Start
+- Docker & Docker Compose installed
+- Python 3.11+ installed
+- Git installed
 
-### Prerequisites
-- Python 3.9+, Node.js 18+, PostgreSQL 13+
+---
 
-### Start Services
+## 🚀 Complete Setup & Execution
 
+### **Step 1: Clone Repository**
+
+git clone https://github.com/ak-pydev/llm-apps-sentiment-analysis.git
+```
+```
 ```bash
-# Terminal 1: Backend
-cd fast-api && source venv/bin/activate && pip install -r requirements.txt
-uvicorn fast_api.main:app --reload
-
-# Terminal 2: Frontend
-cd ui-dashboard && npm install && npm run dev
-
-# Open: http://localhost:5173
+cd llm-app-sentiment-analysis
 ```
 
-**API Docs**: http://localhost:8000/docs
-
----
-
-## 🏗️ Architecture
-
-```
-Scraper → Kafka → Spark → PostgreSQL
-                              ↓
-                       FastAPI Backend (8000)
-                              ↓
-                       React Frontend (5173)
-```
-
-### Database (10 Tables)
-- `reviews` - Raw review data
-- `daily_app_stats` - Daily aggregates
-- `dashboard_*` - Analytics tables (overview, rankings, sentiment, ratings, trending, peak_hours, top_reviews, daily_stats)
-
-### API Endpoints (16 Total)
-
-**Apps** (`/apps`)
-- `GET /apps` - List apps
-- `GET /apps/{app_name}/reviews` - Get reviews
-- `GET /apps/{app_name}/stats` - Get stats
-- `GET /apps/{app_name}/daily-stats` - Daily trend
-- `GET /apps/{app_name}/sentiment-dist` - Sentiment breakdown
-- `GET /apps/{app_name}/rating-dist` - Rating distribution
-
-**Dashboard** (`/dashboard`)
-- `GET /dashboard/overview` - Global metrics
-- `GET /dashboard/rankings` - App rankings
-- `GET /dashboard/daily-stats` - Time-series data
-- `GET /dashboard/sentiment-distribution` - Sentiment dist
-- `GET /dashboard/rating-distribution` - Rating dist
-- `GET /dashboard/top-reviews` - Top positive/negative
-- `GET /dashboard/trending` - Trending apps
-- `GET /dashboard/peak-hours` - Volume by hour
-- `GET /dashboard/full` - Complete snapshot
-
----
-
-## 📁 Project Structure
-
-```
-├── fast-api/              # FastAPI backend
-│   ├── db.py             # Database connection
-│   ├── models.py         # SQLAlchemy ORM (10 models)
-│   ├── schemas.py        # Pydantic schemas
-│   ├── main.py           # FastAPI app
-│   ├── routers/
-│   │   ├── apps.py       # 7 app endpoints
-│   │   └── dashboard.py  # 8 dashboard endpoints
-│   └── requirements.txt
-│
-├── ui-dashboard/         # React frontend
-│   ├── src/
-│   │   ├── components/   # Layout, charts, UI, metrics
-│   │   ├── hooks/        # useApps, useAppStats, useDashboardMetrics, useTrending
-│   │   ├── pages/        # Dashboard, AppPage, ReviewsPage
-│   │   ├── api/          # API client
-│   │   └── utils/        # format.ts, colors.ts
-│   ├── vite.config.ts
-│   └── tailwind.config.js
-│
-├── README.md             # This file
-├── SETUP.md              # Detailed setup & troubleshooting
-└── ui-dashboard/docs/    # Additional documentation
-```
-
----
-
-## 🛠️ Tech Stack
-
-| Backend | Frontend | Database | DevOps |
-|---------|----------|----------|--------|
-| FastAPI | React 19+ | PostgreSQL | Kafka |
-| SQLAlchemy | TypeScript | asyncpg | Spark |
-| asyncpg | Vite | SQLAlchemy | Docker |
-| Pydantic | Tailwind CSS | - | - |
-| - | React Query | - | - |
-| - | Recharts | - | - |
-
----
-
-## 📖 Setup & Docs
-
-**For detailed setup instructions** → See [SETUP.md](./SETUP.md)
-
-**For more documentation** → See [ui-dashboard/docs/](./ui-dashboard/docs/)
-- `INDEX.md` - Master guide
-- `QUICK_START.md` - Developer reference
-- `DEVELOPMENT_CHECKLIST.md` - Task list
-
----
-
-## 🔧 Development
-
-### Backend Development
+### **Step 2: Install Python Dependencies**
 ```bash
-cd fast-api
-source venv/bin/activate
-uvicorn fast_api.main:app --reload
-# http://localhost:8000/docs
+pip install -r requirements.txt
 ```
 
-### Frontend Development
+### **Step 3: Start All Docker Services**
 ```bash
-cd ui-dashboard
-npm run dev
-# http://localhost:5173
+docker-compose up -d
 ```
-
-### Production Build
 ```bash
-# Backend
-gunicorn -w 4 -k uvicorn.workers.UvicornWorker fast_api.main:app
+sleep 30
+```
 
-# Frontend
-cd ui-dashboard && npm run build
+### **Step 4: Verify Services Are Running**
+```bash
+docker-compose ps
+```
+
+### **Step 5: Setup PostgreSQL Database & Tables**
+```bash
+chmod +x scripts/setup_postgres.sh
+```
+```bash
+./scripts/setup_postgres.sh
+```
+
+### **Step 6: Verify Database & Tables Created**
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "\dt"
+```
+
+### **Step 7: Run Producer (Send CSV Data to Kafka)**
+```bash
+python producer/producer.py
+```
+
+### **Step 8: Run Consumer (Kafka → PostgreSQL)**
+```bash
+python consumer/consumer.py
+```
+*Press `Ctrl+C` after all messages consumed*
+
+### **Step 9: Verify Data in PostgreSQL**
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT COUNT(*) FROM reviews;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT app_name, COUNT(*) FROM reviews GROUP BY app_name;"
+```
+
+### **Step 10: Make Spark Helper Script Executable**
+```bash
+chmod +x scripts/helper_script.sh
+```
+
+### **Step 11: Fix Spark Ivy Cache Permissions**
+```bash
+docker exec -u root spark-master bash -c "mkdir -p /tmp/.ivy2/cache && chown -R spark:spark /tmp/.ivy2 && chmod -R 777 /tmp/.ivy2"
+```
+
+### **Step 12: Run Spark Batch Aggregates**
+```bash
+./scripts/helper_script.sh batch_aggregates.py
+```
+
+### **Step 13: Run Spark Dashboard Metrics**
+```bash
+./scripts/helper_script.sh dashboard_metric.py
+```
+
+### **Step 14: Verify All Dashboard Tables Have Data**
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_overview;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_rankings;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_daily_stats LIMIT 5;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_sentiment_dist;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_rating_dist ORDER BY app_name, score;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT app_name, score, thumbsUpCount FROM dashboard_top_reviews LIMIT 5;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_trending;"
+```
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_peak_hours WHERE app_name = 'chatgpt' ORDER BY hour;"
 ```
 
 ---
 
-## ❓ Troubleshooting
+## 🌐 Access Web UIs
 
-| Issue | Fix |
-|-------|-----|
-| Port in use | `lsof -i :8000` then `kill -9 <PID>` |
-| DB connection failed | `brew services start postgresql` |
-| CORS error | Check `VITE_API_BASE_URL` in `.env` |
-| Modules not found | `npm install` or `pip install -r requirements.txt` |
+### **pgAdmin**
+```
+http://localhost:5050
+Email: admin@admin.com
+Password: admin
+```
+
+### **Spark Master UI**
+```
+http://localhost:8080
+```
+
+### **Airflow**
+```
+http://localhost:8082
+```
 
 ---
 
-## 📚 Resources
-
-- [FastAPI Docs](https://fastapi.tiangolo.com/)
-- [React Docs](https://react.dev/)
-- [Vite Guide](https://vitejs.dev/)
-- [SQLAlchemy Async](https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html)
+## 🔄 Re-run Pipeline with Fresh Data
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "TRUNCATE TABLE reviews, daily_app_stats, dashboard_overview, dashboard_rankings, dashboard_daily_stats, dashboard_sentiment_dist, dashboard_rating_dist, dashboard_top_reviews, dashboard_trending, dashboard_peak_hours CASCADE;"
+```
+```bash
+python producer/producer.py
+```
+```bash
+python consumer/consumer.py
+```
+```bash
+./scripts/helper_script.sh batch_aggregates.py
+```
+```bash
+./scripts/helper_script.sh dashboard_metric.py
+```
 
 ---
 
-**License**: MIT | **Status**: Production Ready ✅
+## 🛑 Stop All Services
+```bash
+docker-compose down
+```
+
+---
+
+## 🔧 Troubleshooting Commands
+
+### Restart Services
+```bash
+docker-compose down
+```
+```bash
+docker-compose up -d
+```
+```bash
+sleep 30
+```
+
+### Create Database Manually
+```bash
+docker exec -it postgres psql -U airflow -c "CREATE DATABASE llm_reviews;"
+```
+```bash
+./scripts/setup_postgres.sh
+```
+
+### Fix Spark Ivy Permissions
+```bash
+docker exec -u root spark-master bash -c "mkdir -p /tmp/.ivy2/cache && chown -R spark:spark /tmp/.ivy2 && chmod -R 777 /tmp/.ivy2"
+```
+
+### View Service Logs
+```bash
+docker-compose logs -f kafka
+```
+```bash
+docker-compose logs -f postgres
+```
+```bash
+docker-compose logs -f spark-master
+```
+```bash
+docker-compose logs -f airflow
+```
+
+---
+
+## 🎯 Quick One-Liner (After First Setup)
+```bash
+python producer/producer.py && python consumer/consumer.py & sleep 15 && kill %1 && ./scripts/helper_script.sh batch_aggregates.py && ./scripts/helper_script.sh dashboard_metric.py
+```
+
+---
+
+## ✅ Verification Commands
+
+### Count reviews
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT COUNT(*) FROM reviews;"
+```
+
+### Check rankings
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT * FROM dashboard_rankings;"
+```
+
+### List all tables
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "\dt"
+```
+
+### Check table sizes
+```bash
+docker exec -it postgres psql -U airflow -d llm_reviews -c "SELECT schemaname, tablename, n_live_tup as row_count FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
+```
